@@ -224,6 +224,7 @@ export const getUserProfile = async (req: AuthRequest, res: Response) => {
 export const deleteUserProfile = async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId;
+    const { password } = req.body;
 
     if (!userId) {
       return res.status(400).json({ message: "User ID is required" });
@@ -233,6 +234,11 @@ export const deleteUserProfile = async (req: AuthRequest, res: Response) => {
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ message: "Incorrect password" });
     }
 
     if (userId !== user._id.toString() && user.role !== "admin") {

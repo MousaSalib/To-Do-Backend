@@ -7,13 +7,16 @@ import { sendEmail } from "../utils/sendEmail";
 import { otpTemplate } from "../templates/otpTemplate";
 import { uploadImageBuffer } from "../lib/cloudinary";
 import { otpPasswordTemplate } from "../templates/otpPasswordTemplate";
+import { resetPasswordTemplate } from "../templates/resetPasswordTemplate";
 
 export const register = async (req: Request, res: Response) => {
   const { name, email, password } = req.body;
 
   const existingUser = await User.findOne({ email });
   if (existingUser) {
-    return res.status(400).json({ message: "User already exists" });
+    return res
+      .status(400)
+      .json({ message: "User already exists, You have to login" });
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
@@ -101,6 +104,7 @@ export const login = async (req: Request, res: Response) => {
       name: user.name,
       email: user.email,
       isVerified: user.isVerified,
+      profileImage: user.profileImage,
     },
   });
 };
@@ -113,52 +117,82 @@ export const forgotPassword = async (req: Request, res: Response) => {
     return res.status(400).json({ message: "User not found" });
   }
 
-  const otp = crypto.randomInt(100000, 999999).toString();
-  const hashedOtp = await bcrypt.hash(otp, 10);
-
   const resetToken = crypto.randomBytes(32).toString("hex");
   const resetTokenExpires = new Date(Date.now() + 15 * 60 * 1000);
 
-  user.otp = hashedOtp;
-  user.otpExpires = resetTokenExpires;
   user.resetToken = resetToken;
   user.resetTokenExpires = resetTokenExpires;
 
   await user.save();
 
-  await sendEmail(email, "Reset Your Password", otpPasswordTemplate(otp));
+  const resetLink = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+
+  await sendEmail(
+    email,
+    "Reset Your Password",
+    resetPasswordTemplate(resetLink)
+  );
 
   res.json({
-    message: "Password reset OTP sent to your email",
-    resetToken,
+    message: "Password reset link sent to your email",
+    resetLink,
   });
 };
 
 export const resetPassword = async (req: Request, res: Response) => {
-  const { resetToken, otp, newPassword } = req.body;
+  try {
+    const { token } = req.params;
+    const { newPassword } = req.body;
 
-  const user = await User.findOne({
-    resetToken,
-    resetTokenExpires: { $gt: new Date() },
-  });
+    const user = await User.findOne({
+      resetToken: token,
+      resetTokenExpires: { $gt: new Date() },
+    });
 
+    if (!user) {
+      return res
+        .status(400)
+        .json({ message: "Invalid or expired reset token" });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    user.password = hashedPassword;
+    user.resetToken = undefined;
+    user.resetTokenExpires = undefined;
+
+    await user.save();
+
+    res.json({ message: "Password reset successfully" });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return res
+      .status(500)
+      .json({ message: "Server error. Please try again later." });
+  }
+};
+
+export const resendOtp = async (req: Request, res: Response) => {
+  const { email } = req.body;
+
+  const user = await User.findOne({ email });
   if (!user) {
-    return res.status(400).json({ message: "Invalid or expired reset token" });
+    return res.status(400).json({ message: "User not found" });
   }
 
-  const isValidOtp = await bcrypt.compare(otp, user.otp!);
-  if (!isValidOtp || !user.otpExpires || user.otpExpires < new Date()) {
-    return res.status(400).json({ message: "Invalid or expired OTP" });
+  if (user.isVerified) {
+    return res.status(400).json({ message: "User already verified" });
   }
 
-  const hashedPassword = await bcrypt.hash(newPassword, 10);
-  user.password = hashedPassword;
-  user.otp = undefined;
-  user.otpExpires = undefined;
-  user.resetToken = undefined;
-  user.resetTokenExpires = undefined;
+  const otp = crypto.randomInt(100000, 999999).toString();
+  const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+  user.otp = otp;
+  user.otpExpires = otpExpires;
 
   await user.save();
 
-  res.json({ message: "Password reset successfully" });
+  await sendEmail(email, "Verify your email", otpTemplate(otp));
+
+  res.json({ message: "New OTP sent successfully" });
 };
